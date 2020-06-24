@@ -1,16 +1,15 @@
-from my_bsr import my_bsr_mat
 import jax.numpy as jnp
 from jax import jacfwd
 import numpy as np
 
-sigma0 = jnp.eye(2, dtype=jnp.complex64)
-sigmax = jnp.array([[0., 1.], [1., 0.]], dtype=jnp.complex64)
-sigmay = jnp.array([[0., -1j], [1j, 0]], dtype=jnp.complex64)
-sigmaz = jnp.array([[1., 0.], [0., -1.]], dtype=jnp.complex64)
-sigmap = jnp.array([[0., 1.], [0., 0.]], dtype=jnp.complex64)
-sigmam = jnp.array([[0., 0.], [1., 0.]], dtype=jnp.complex64)
+sigma0 = np.eye(2, dtype=jnp.complex64)
+sigmax = np.array([[0., 1.], [1., 0.]], dtype=np.complex64)
+sigmay = np.array([[0., -1j], [1j, 0]], dtype=np.complex64)
+sigmaz = np.array([[1., 0.], [0., -1.]], dtype=np.complex64)
+sigmap = np.array([[0., 1.], [0., 0.]], dtype=np.complex64)
+sigmam = np.array([[0., 0.], [1., 0.]], dtype=np.complex64)
 
-sigma = jnp.array([sigma0, sigmax, sigmay, sigmaz, sigmap, sigmam])
+sigma = np.array([sigma0, sigmax, sigmay, sigmaz, sigmap, sigmam])
 
 
 class Quantum:
@@ -35,8 +34,10 @@ class Quantum:
         if len(self.diag_qtm_nums) == 0:
             self.diag_qtm_nums = {'anon.': [0]}
         self.ndiag_qtm_nums.update(ndiag_qtm_nums)
-        self.num_d_qtm = tuple(map(len, diag_qtm_nums.values()))
-        self.num_nd_qtm = tuple(map(len, ndiag_qtm_nums.values()))
+        self.num_d_qtm = tuple(map(len, self.diag_qtm_nums.values()))
+        self.num_nd_qtm = tuple(map(len, self.ndiag_qtm_nums.values()))
+        self.num_nd_basis = int(np.product(self.num_nd_qtm))
+        self.num_nd_bands = self.num_nd_basis * self.num_sub
         Basis = {}
         diag_Idx = [[]]
         diag_keys = self.diag_qtm_nums.keys()
@@ -48,16 +49,16 @@ class Quantum:
         for key in ndiag_keys:
             ndiag_Idx = [idx+[idx1]
                          for idx in ndiag_Idx for idx1 in self.ndiag_qtm_nums[key]]
+        basis = {}
+        j = 0
+        for ndiag_idx in ndiag_Idx:
+            basis[tuple(ndiag_idx)] = j
+            j = j + 1
+        self.nd_basis = basis
         i = 0
         for diag_idx in diag_Idx:
-            basis = {}
-            j = 0
-            for ndiag_idx in ndiag_Idx:
-                basis[tuple(ndiag_idx)] = j
-                j = j+1
             Basis[tuple(diag_idx)] = (i, basis)
             i = i+1
-
         self.Basis = Basis
 
     def print_basis(self):
@@ -73,28 +74,20 @@ class Quantum:
         print(temp)
 
     def hm(self, d_qtm):
-        basis = list(self.Basis.values())[0][1]
-        indices = []
-        data = []
-        indptr = [0]
-        count = 0
+        res = np.zeros((self.num_nd_bands, self.num_nd_bands), dtype=np.complex64)
+        basis = self.nd_basis
+        i = 0
         for nd_qtm1 in basis:
+            # self.hopping could be tuple, list, etc. but not a generator
             for delta_nd_qtm in self.hoppings:
                 nd_qtm2 = tuple(np.array(nd_qtm1)-np.array(delta_nd_qtm))
                 j = basis.get(nd_qtm2)
                 if j != None:
-                    count = count+1
-                    indices = indices+[j]
-                    data = data + [self.hopping_func(d_qtm, nd_qtm1, delta_nd_qtm)]
-            indptr = indptr + [count]
-
-        indptr = np.array(indptr)
-        indices = np.array(indices)
-        data = jnp.array(data)
-        num_basis = len(basis)
-        num_bands = self.num_sub*num_basis
-        self.num_bands=num_bands
-        return my_bsr_mat(data, indices, indptr, shape=(num_bands, num_bands))
+                    res[i * self.num_sub : (i + 1) * self.num_sub, j * self.num_sub : (j + 1) * self.num_sub] = self.hopping_func(d_qtm, nd_qtm1, delta_nd_qtm)
+            i = i + 1
+        self.flag = self.flag + 1
+        print(self.flag)
+        return jnp.asarray(res)
 
     def mk_hamiltonian(self):
         hamiltonian = {}
@@ -106,7 +99,7 @@ class Quantum:
         print("The Hamiltonian of "+str(tuple(self.diag_qtm_nums.keys()))+" is:")
         for diag_idx in self.hamiltonian:
             print(diag_idx)
-            print(self.hamiltonian[diag_idx])
+            print(jnp.round(self.hamiltonian[diag_idx], decimals=3)[0:4])
 
     def solve(self):
         eigen_energies = {}
@@ -126,6 +119,7 @@ class Quantum:
             print(diag_idx)
             print(self.eigen_energies[diag_idx])
 
+
 def test_Quantum():
     d_qtm = {'i': list(range(5))}
     nd_qtm = {'j': list(range(5))}
@@ -144,9 +138,6 @@ def test_Quantum():
     cubic.print_hamiltonian()
     cubic.solve()
     cubic.print_eigen_energies()
-
-
-
 
 
 if __name__ == "__main__":
