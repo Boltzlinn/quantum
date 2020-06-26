@@ -4,7 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax import jacfwd, jit
 from functools import partial
-
+import time
+from jax.lax import cond
 
 def TBG():
     Pi = np.pi
@@ -31,37 +32,29 @@ def TBG():
                   kstart=0.5 / num_k1, bz_shape=5, special_pts=special_pts, hoppings=hoppings, num_sub=4)
     tbg.mk_basis({"v": [-1, 1]}, {})
     # tbg.print_basis()
-    @partial(jit, static_argnums=(1,2,3))
+    U0 = np.kron(sigma[5], np.array([[u0, u0P], [u0P, u0]], dtype=np.complex64))
+    U1 = np.kron(sigma[5], np.array([[u0, u0P * np.exp(1j * 2 * Pi / 3)],
+                       [u0P * np.exp(-1j * 2 * Pi / 3), u0]], dtype=np.complex64))
+    U2 = np.kron(sigma[5], np.array([[u0, u0P * np.exp(-1j * 2 * Pi / 3)],
+                       [u0P * np.exp(1j * 2 * Pi / 3), u0]], dtype=np.complex64))
+    @partial(jit, static_argnums=(1,3))
     def hopping_func(k, d_qtm_nk, nd_qtm1, delta_nd_qtm):
         vly, = d_qtm_nk
-        G = np.array(nd_qtm1)
-        U0 = np.array([[u0, u0P], [u0P, u0]], dtype=np.complex64)
-        U1 = np.array([[u0, u0P * np.exp(1j * 2 * Pi / 3)],
-                       [u0P * np.exp(-1j * 2 * Pi / 3), u0]], dtype=np.complex64)
-        U2 = np.array([[u0, u0P * np.exp(-1j * 2 * Pi / 3)],
-                       [u0P * np.exp(1j * 2 * Pi / 3), u0]], dtype=np.complex64)
-        res = jnp.zeros((4, 4), dtype=jnp.complex64)
-        if vly == 1:
-            U1 = U1.conj()
-            U2 = U2.conj()
         if delta_nd_qtm == (0, 0):
-            k1 = (k + G - np.array([1. / 3., 2. / 3.])) @ bvec
-            k2 = (k + G - np.array([2. / 3., 1. / 3.])) @ bvec
-            if vly == 1:
-                k1, k2 = k2, k1
-
-            res = res.at[0:2, 0:2].set(-vF * k1[0] * vly * sigma[1] - vF * k1[1] * sigma[2] + mass * sigma[3])
-            res = res.at[0:2, 2:4].set(U0.T.conj())
-            res = res.at[2:4, 0:2].set(U0)
-            res = res.at[2:4, 2:4].set(-vF * k2[0] * vly * sigma[1] - vF * k2[1] * sigma[2])
-        elif delta_nd_qtm == tuple(vly * np.array((1, 0))):
-            res = res.at[0:2, 2:4].set(U1.T.conj())
-        elif delta_nd_qtm == tuple(-vly * np.array((1, 0))):
-            res = res.at[2:4, 0:2].set(U1)
-        elif delta_nd_qtm == tuple(-vly * np.array((0, 1))):
-            res = res.at[0:2, 2:4].set(U2.T.conj())
-        elif delta_nd_qtm == tuple(vly * np.array((0, 1))):
-            res = res.at[2:4, 0:2].set(U2)
+            G = jnp.array(nd_qtm1)
+            K1, K2 = np.array([[1. / 3., 2. / 3.], [2. / 3., 1. / 3.]])
+            K1, K2 = jnp.where(vly == 1, (K2, K1), (K1, K2))
+            k1 = (k + G - K1) @ bvec
+            k2 = (k + G - K2) @ bvec
+            res = jnp.asarray(U0 + U0.T.conj() + jnp.kron((sigma[0] + sigma[3]) / 2, -vF * k1[0] * vly * sigma[1] - vF * k1[1] * sigma[2] + mass * sigma[3]) + jnp.kron((sigma[0] - sigma[3]) / 2, -vF * k2[0] * vly * sigma[1] - vF * k2[1] * sigma[2]))
+        elif delta_nd_qtm == tuple(np.array((1, 0))):
+            res = jnp.where(vly == 1, U1.T, U1)
+        elif delta_nd_qtm == tuple(np.array((-1, 0))):
+            res = jnp.where(vly == 1, U1.conj(), U1.T.conj())
+        elif delta_nd_qtm == tuple(np.array((0, -1))):
+            res = jnp.where(vly ==1, U2.T, U2)
+        elif delta_nd_qtm == tuple(np.array((0, 1))):
+            res = jnp.where(vly ==1, U2.conj(), U2.T.conj())
         return jnp.asarray(res)
     tbg.hopping_func = hopping_func
 

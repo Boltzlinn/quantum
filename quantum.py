@@ -73,20 +73,23 @@ class Quantum:
         print("The basis set {"+str(tuple(diag_keys+ndiag_keys))+":#} is:")
         print(temp)
 
+    @partial(jit, static_argnums=(0, 1))
     def hm(self, d_qtm):
-        res = np.zeros((self.num_nd_bands, self.num_nd_bands), dtype=np.complex64)
+        num_nd_bands = self.num_nd_bands
         basis = self.nd_basis
-        i = 0
-        for nd_qtm1 in basis:
+        hoppings = self.hoppings
+        num_sub = self.num_sub
+        hopping_func = self.hopping_func
+        res = jnp.zeros((num_nd_bands, num_nd_bands), dtype=jnp.complex64)
+        for delta_nd_qtm in hoppings:
             # self.hopping could be tuple, list, etc. but not a generator
-            for delta_nd_qtm in self.hoppings:
+            i = 0
+            for nd_qtm1 in basis:
                 nd_qtm2 = tuple(np.array(nd_qtm1)-np.array(delta_nd_qtm))
                 j = basis.get(nd_qtm2)
                 if j != None:
-                    res[i * self.num_sub : (i + 1) * self.num_sub, j * self.num_sub : (j + 1) * self.num_sub] = self.hopping_func(d_qtm, nd_qtm1, delta_nd_qtm)
-            i = i + 1
-        self.flag = self.flag + 1
-        print(self.flag)
+                    res[i * num_sub : (i + 1) * num_sub, j * num_sub : (j + 1) * num_sub] = hopping_func(d_qtm, nd_qtm1, delta_nd_qtm)
+                i = i + 1
         return jnp.asarray(res)
 
     def mk_hamiltonian(self):

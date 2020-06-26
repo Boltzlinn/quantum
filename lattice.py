@@ -1,10 +1,11 @@
 from quantum import Quantum, sigma
 import jax.numpy as jnp
-from jax import grad, jacfwd, jacrev, jit
+from jax import grad, jacfwd, jacrev, jit, vmap
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import linalg
 from functools import partial
+import time
 
 
 class Lattice(Quantum):
@@ -46,7 +47,7 @@ class Lattice(Quantum):
         print("Hopping function not set!")
         exit()
 
-    @partial(jit, static_argnums=(0,2))
+    @partial(jit, static_argnums=(0))
     def hm(self, k, d_qtm_nk):
         num_nd_bands = self.num_nd_bands
         basis = self.nd_basis
@@ -54,15 +55,15 @@ class Lattice(Quantum):
         num_sub = self.num_sub
         hopping_func = self.hopping_func
         res = jnp.zeros((num_nd_bands, num_nd_bands), dtype=jnp.complex64)
-        i = 0
-        for nd_qtm1 in basis:
+        for delta_nd_qtm in hoppings:
             # self.hopping could be tuple, list, etc. but not a generator
-            for delta_nd_qtm in hoppings:
+            i = 0
+            for nd_qtm1 in basis:
                 nd_qtm2 = tuple(np.array(nd_qtm1)-np.array(delta_nd_qtm))
                 j = basis.get(nd_qtm2)
                 if j != None:
                     res = res.at[i * num_sub : (i + 1) * num_sub, j * num_sub : (j + 1) * num_sub].set(hopping_func(k, d_qtm_nk, nd_qtm1, delta_nd_qtm))
-            i = i + 1
+                i = i + 1
         return jnp.asarray(res)
 
     def mk_hamiltonian(self):
@@ -135,7 +136,14 @@ class Lattice(Quantum):
         linestyles = ['-', '--', '-.', ':']
         for temp in zip(d_qtm_nk_list, linestyles):
             d_qtm_nk, lt = temp
-            engies = jnp.asarray([jnp.linalg.eigvalsh(self.hm(k, d_qtm_nk)) for k in kpath])
+            t0 = time.clock()
+            hms = [self.hm(k, d_qtm_nk) for k in kpath]
+            t1 = time.clock()
+            engies = jnp.asarray([jnp.linalg.eigvalsh(mat) for mat in hms])
+            t2 = time.clock()
+            print(t1 - t0)
+            print(t2 - t1)
+            #engies = jnp.asarray([jnp.linalg.eigvalsh(self.hm(k, d_qtm_nk)) for k in kpath])
             [ax.plot(x, engies[:,i], lt) for i in range(self.num_nd_bands)]
         en_bot = np.min(engies[:,0])
         en_top = np.max(engies[:,-1])
