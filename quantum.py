@@ -1,6 +1,7 @@
 import jax.numpy as jnp
-from jax import jacfwd
+from jax import jacfwd, jit
 import numpy as np
+from functools import partial
 
 sigma0 = np.eye(2, dtype=jnp.complex64)
 sigmax = np.array([[0., 1.], [1., 0.]], dtype=np.complex64)
@@ -10,6 +11,12 @@ sigmap = np.array([[0., 1.], [0., 0.]], dtype=np.complex64)
 sigmam = np.array([[0., 0.], [1., 0.]], dtype=np.complex64)
 
 sigma = np.array([sigma0, sigmax, sigmay, sigmaz, sigmap, sigmam])
+
+
+def p_mat(i, j, N):
+    res = np.zeros((N, N), dtype=np.complex64)
+    res[i, j] = 1.
+    return jnp.asarray(res)
 
 
 class Quantum:
@@ -24,10 +31,26 @@ class Quantum:
                 self.ndiag_qtm_nums['spin'] = [-0.5, 0.5]
             else:
                 self.diag_qtm_nums['spin'] = [-0.5, 0.5]
+    @staticmethod
+    def fermi(e):
+        if e > 0.:
+            return 0
+        else:
+            return 1
 
     @staticmethod
     def hopping_func(d_qtm, nd_qtm1, delta_nd_qtm):
         pass
+
+    def nd_qtm_add(self, nd_qtm1, delta_nd_qtm):
+        nd_qtm2 = tuple(np.array(nd_qtm1) + np.array(delta_nd_qtm))
+        j = self.nd_basis.get(nd_qtm2)
+        return nd_qtm2, j
+    
+    def nd_qtm_minus(self, nd_qtm1, delta_nd_qtm):
+        nd_qtm2 = tuple(np.array(nd_qtm1) - np.array(delta_nd_qtm))
+        j = self.nd_basis.get(nd_qtm2)
+        return nd_qtm2, j
 
     def mk_basis(self, diag_qtm_nums, ndiag_qtm_nums):
         self.diag_qtm_nums.update(diag_qtm_nums)
@@ -75,18 +98,16 @@ class Quantum:
 
     @partial(jit, static_argnums=(0, 1))
     def hm(self, d_qtm):
-        num_nd_bands = self.num_nd_bands
         basis = self.nd_basis
-        hoppings = self.hoppings
         num_sub = self.num_sub
         hopping_func = self.hopping_func
-        res = jnp.zeros((num_nd_bands, num_nd_bands), dtype=jnp.complex64)
-        for delta_nd_qtm in hoppings:
+        res = jnp.zeros((self.num_nd_bands, self.num_nd_bands), dtype=jnp.complex64)
+        for delta_nd_qtm in self.hoppings:
             # self.hopping could be tuple, list, etc. but not a generator
             i = 0
             for nd_qtm1 in basis:
-                nd_qtm2 = tuple(np.array(nd_qtm1)-np.array(delta_nd_qtm))
-                j = basis.get(nd_qtm2)
+                i = basis[nd_qtm1]
+                j = self.nd_qtm_minus(nd_qtm1, delta_nd_qtm)[1]
                 if j != None:
                     res[i * num_sub : (i + 1) * num_sub, j * num_sub : (j + 1) * num_sub] = hopping_func(d_qtm, nd_qtm1, delta_nd_qtm)
                 i = i + 1

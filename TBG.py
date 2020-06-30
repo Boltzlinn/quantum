@@ -5,7 +5,6 @@ import numpy as np
 from jax import jacfwd, jit
 from functools import partial
 import time
-from jax.lax import cond
 
 def TBG():
     Pi = np.pi
@@ -14,7 +13,6 @@ def TBG():
     Ls = a0*0.5/np.sin(theta_angle*0.5)
     sqrt_3 = np.sqrt(3.0)
     a = Ls/sqrt_3
-    Occ_factor = 4.0/8.0
     vF = 5.253
     u0 = 0.0797
     u0P = 0.0975
@@ -37,7 +35,7 @@ def TBG():
                        [u0P * np.exp(-1j * 2 * Pi / 3), u0]], dtype=np.complex64))
     U2 = np.kron(sigma[5], np.array([[u0, u0P * np.exp(-1j * 2 * Pi / 3)],
                        [u0P * np.exp(1j * 2 * Pi / 3), u0]], dtype=np.complex64))
-    @partial(jit, static_argnums=(1,3))
+    @partial(jit, static_argnums=(3))
     def hopping_func(k, d_qtm_nk, nd_qtm1, delta_nd_qtm):
         vly, = d_qtm_nk
         if delta_nd_qtm == (0, 0):
