@@ -11,7 +11,6 @@ import time
 class Lattice(Quantum):
 
     def __init__(self, dim, avec, bvec, real_shape=3, kstart=0., bz_shape=5, special_pts={}, ifspin=0, ifmagnetic=0, hoppings=(), num_sub=1):
-        self.flag = 0
         self.dim = dim
         self.avec = avec
         self.bvec = bvec
@@ -68,6 +67,11 @@ class Lattice(Quantum):
             part2 = container[idx:]
         return part1, part2
 
+    @staticmethod
+    @jit
+    def vec2arr(vec):
+        return vec[:,None]-vec[None,:]
+
     @partial(jit, static_argnums=(0))
     def mk_V(self):
         d_qtm_list = list(self.Basis.keys())
@@ -86,49 +90,41 @@ class Lattice(Quantum):
                         V[d_qtm_nk][i * num_sub:(i + 1) * num_sub, j * num_sub:(j + 1) * num_sub] = self.ext_potential(d_qtm_nk, delta_nd_qtm)
         self.V = V
     
-    @partial(jit, static_argnums=(0))
+    @partial(jit, static_argnums=(0, 2))
     def hm(self, k, d_qtm_nk):
         data = tuple(map(lambda nd_qtm: self.kinetic(k, d_qtm_nk, nd_qtm), list(self.nd_basis.keys())))
         diag = jnp.kron(jnp.eye(self.num_nd_basis, dtype=jnp.complex64), jnp.ones((self.num_sub, self.num_sub), dtype=jnp.complex64))
-        T = jnp.repeat(jnp.vstack(data), self.num_nd_basis, axis=1) * diag
+        T = jnp.repeat(jnp.hstack(data).reshape((1, -1)), self.num_nd_basis, axis=0).reshape((self.num_nd_bands, self.num_nd_bands)) * diag
         return jnp.asarray(T + self.V[d_qtm_nk])
 
-    @partial(jit, static_argnums=(0,3,4))
+    @partial(jit, static_argnums=(0,2,3,4))
     def shg_ipa(self, k, d_qtm_nk, Omega, bd_range):
-        eta = 0.03
+        eta = 0.001
         bot, top = bd_range
-        num_bds = top - bot
-        Res = lambda kk: jnp.linalg.eigh(self.hm(kk, d_qtm_nk))
-        Jac = jacfwd(Res)
-        #Hess = jacfwd(Jac)
-        eigval, wvfunc = Res(k)
-        eigval_jac, wvfunc_jac = Jac(k)
-        #eigval_hess, wvfunc_hess = Hess(k)
-        #print(3)
-        dist = jnp.where(eigval[bot:top] > 0., 0, 1)
-        def vec2arr(vec):
-            return vec[:,None]-vec[None,:]
-        distdiff = vec2arr(dist)  #[bd_range,bd_range]
-        endiff = vec2arr(eigval[bot:top])  #[bd_range,bd_range]
-        no_diag = 1. - jnp.eye(num_bds)
+        eigval, wvfunc = jnp.linalg.eigh(self.hm(k, d_qtm_nk))
+        Vel = jacfwd(self.hm, argnums=(0))(k, d_qtm_nk)
+        vel = jnp.einsum('lk,lma,mn->kna', wvfunc.conj()[:, bot:top], Vel, wvfunc[:, bot:top])  #[bd_range,bd_range,dim]
 
-        xi = vmap(jnp.dot, (None, 2), 2)(wvfunc.T.conj()[bot:top], wvfunc_jac[:, bot:top])  #[bd_range,bd_range,dim]
-        re = no_diag[:,:,None] * xi  #[bd_range,bd_range,dim]
-        ri = vmap(jnp.diag, 2, 1)(xi)  #[bd_range,dim]
-        ri = vmap(vec2arr, 1, 2)(ri)  #[bd_range,bd_range,dim]
-        endiff_jac = vmap(vec2arr, 1, 2)(eigval_jac[bot:top])  #[bd_range,bd_range,dim]
-        endiff_gd = endiff_jac - 1j * endiff[:,:,None] * ri  #[bd_range,bd_range,dim]
-        #xi_jac = vmap(vmap(jnp.dot, (2, None), 2), (None, 2), 3)(jnp.transpose(wvfunc_jac[:, bot:top], axes=(1, 0, 2)).conj(), wvfunc_jac[:, bot:top]) + vmap(vmap(jnp.dot, (None, 2), 2), (None, 3), 3)(wvfunc.T.conj()[bot:top], wvfunc_hess[:, bot:top])  #[bd_range,bd_range,dim,dim]
-        #re_jac = no_diag[:,:, None, None] * xi_jac  #[bd_range,bd_range,dim,dim]
-        re_gd = (re[:,:,:, None] * (jnp.transpose(endiff_gd, axes=(1, 0, 2))[:,:, None,:]) + re[:,:, None,:] * (jnp.transpose(endiff_gd, axes=(1, 0, 2))[:,:,:, None]) + 1j * jnp.einsum('nla,lmb->nmab', re, re * endiff[:,:, None]) - 1j * jnp.einsum('nlb,lma->nmab', re * endiff[:,:, None], re)) / endiff[:,:, None, None]
-        re_gd = jnp.where(jnp.isinf(re_gd), 0.,re_gd)
-        #re_gd = re_jac - 1j * re[:,:, None,:] * ri[:,:,:, None]  #[bd_range,bd_range,dim,dim]
-        g = distdiff.T[None,:,:, None] * re[None,:,:,:] / (Omega[:, None, None, None] + 1j * eta - endiff[None,:,:, None])  #[nOmega,bd_range,bd_range,dim]
-        gg = re[None,:,:,:] / (Omega[:,None,None,None] + 1j * eta - endiff[None,:,:,None])  #[nOmega,bd_range,bd_range,dim]
-        h = re[None,:,:,:] / (2 * Omega[:,None,None,None] + 2 * 1j * eta + endiff[None,:,:,None])  #[nOmega,bd_range,bd_range,dim]
-        g_gd = distdiff.T[None,:,:,None,None] * (re_gd[None,:,:,:,:] + re[None,:,:,None,:] * endiff_gd[None,:,:,:,None] / (Omega[:,None,None,None,None] + 1j * eta - endiff[None,:,:,None,None])) / (Omega[:,None,None,None,None] + 1j * eta - endiff[None,:,:,None,None])  #[nOmega,bd_range,bd_range,dim,dim]
-        rg = 1j * g_gd + jnp.einsum('nlb,olma->onmba', re, g) - jnp.einsum('onla,lmb->onmba', g, re)  #[nOmega,bd_range,bd_range,dim,dim]
-        res = jnp.transpose(h, (0, 2, 1, 3))[:,:,:,:, None, None] * rg[:,:,:, None,:,:] - 1j / 2 * jnp.transpose(gg, (0, 2, 1, 3))[:,:,:, None, None,:] * g_gd[:,:,:,:,:, None]
+        dist = jnp.where(eigval[bot:top] > 0., 0, 1)
+        d_dist = self.vec2arr(dist)  #[bd_range,bd_range]
+        d_en = self.vec2arr(eigval[bot:top])  #[bd_range,bd_range]
+
+        r_inter = -1j * vel/d_en[:,:,None]  #[bd_range,bd_range,dim]
+        r_inter = jnp.where(jnp.isinf(r_inter), 0.,r_inter)  #[bd_range,bd_range,dim]
+
+        d_en_jac = vmap(self.vec2arr, 1, 2)(vmap(jnp.diag,2,1)(vel))  #[bd_range,bd_range,dim]
+        
+        r_inter_gd = (r_inter[:,:,:, None] * jnp.transpose(d_en_jac, axes=(1, 0, 2))[:,:, None,:] + r_inter[:,:, None,:] * (jnp.transpose(d_en_jac, axes=(1, 0, 2))[:,:,:, None]) + 1j * jnp.einsum('nla,lmb->nmab', r_inter, r_inter * d_en[:,:, None]) - 1j * jnp.einsum('nlb,lma->nmab', r_inter * d_en[:,:, None], r_inter)) / d_en[:,:, None, None]
+        r_inter_gd = jnp.where(jnp.isinf(r_inter_gd), 0.,r_inter_gd)  #[bd_range,bd_range,dim,dim]
+
+        f = r_inter[None,:,:,:] / (Omega[:,None,None,None] + 1j * eta - d_en[None,:,:,None])  #[nOmega,bd_range,bd_range,dim]
+        h = r_inter[None,:,:,:] / (2 * Omega[:, None, None, None] + 2 * 1j * eta + d_en[None,:,:, None])  #[nOmega,bd_range,bd_range,dim]
+        
+        g = d_dist.T[None,:,:, None] * f  #[nOmega,bd_range,bd_range,dim]
+        g_gd = (d_dist.T[None,:,:, None, None] * r_inter_gd[None,:,:,:,:] + g[:,:,:, None,:] * d_en_jac[None,:,:,:, None]) / (Omega[:, None, None, None, None] + 1j * eta - d_en[None,:,:, None, None])  #[nOmega,bd_range,bd_range,dim,dim]
+        
+        rg = 1j * g_gd + jnp.einsum('nlb,olma->onmba', r_inter, g) - jnp.einsum('onla,lmb->onmba', g, r_inter)  #[nOmega,bd_range,bd_range,dim,dim]
+        res = jnp.transpose(h, (0, 2, 1, 3))[:,:,:,:, None, None] * rg[:,:,:, None,:,:] - 1j / 2 * jnp.transpose(f, (0, 2, 1, 3))[:,:,:, None, None,:] * g_gd[:,:,:,:,:, None]  #[nOmega,bd_range,bd_range,dim,dim,dim]
         return jnp.sum(res, axis=(1, 2))
 
     def mk_hamiltonian(self):
@@ -142,7 +138,7 @@ class Lattice(Quantum):
         dim = self.dim
         num_O = len(Omega)
         res = jnp.zeros((num_O, dim, dim, dim), dtype=jnp.complex64)
-        flag=0
+        flag = 0
         for d_qtm in self.Basis:
             k, d_qtm_nk = self.separate(d_qtm, dim)
             k = jnp.array(k)
