@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from scipy import linalg
 from functools import partial
 import time
+from operator import itemgetter
 
 
 class Lattice(Quantum):
@@ -17,6 +18,8 @@ class Lattice(Quantum):
         self.special_pts = special_pts
         self.diag_qtm_nums = {}
         self.ndiag_qtm_nums = {}
+        self.hamiltonian = {}
+        self.G_list = {}
         self.V = {}
         if np.sum(real_shape) <= 0:
             print('real_shape can not be 0 or negative, real_shape is set to 1 instead')
@@ -51,6 +54,11 @@ class Lattice(Quantum):
     def ext_potential(d_qtm_nk, delta_nd_qtm):
         print("external potential not set")
         pass
+
+    @staticmethod
+    def interaction(q, delta_d_qtm_nk):
+        print("interaction not set")
+        pass
     
     @staticmethod
     def separate(container, idx):
@@ -84,7 +92,8 @@ class Lattice(Quantum):
             # self.hopping could be tuple, list, etc. but not a generator
             for nd_qtm1 in basis:
                 i = basis.get(nd_qtm1)
-                j = self.nd_qtm_minus(nd_qtm1, delta_nd_qtm)[1]
+                nd_qtm2 = self.qtm_minus(nd_qtm1, delta_nd_qtm)
+                j = self.nd_basis.get(nd_qtm2)
                 if j != None:
                     for d_qtm_nk in V:
                         V[d_qtm_nk][i * num_sub:(i + 1) * num_sub, j * num_sub:(j + 1) * num_sub] = self.ext_potential(d_qtm_nk, delta_nd_qtm)
@@ -97,17 +106,285 @@ class Lattice(Quantum):
         T = jnp.repeat(jnp.hstack(data).reshape((1, -1)), self.num_nd_basis, axis=0).reshape((self.num_nd_bands, self.num_nd_bands)) * diag
         return jnp.asarray(T + self.V[d_qtm_nk])
 
+    def mk_hamiltonian(self):
+        hamiltonian = {}
+        for d_qtm in self.Basis:
+            k, d_qtm_nk = self.separate(d_qtm, self.dim)
+            k = jnp.array(k)
+            hamiltonian[d_qtm] = self.hm(k, d_qtm_nk)
+        self.hamiltonian = hamiltonian
+
+    @partial(jit, static_argnums=(0))
+    def mk_overlape_idx(self):
+        idx = []
+        num_sub = self.num_sub
+        eye = np.eye(self.num_nd_bands, dtype=np.int32)
+        for G in self.G_list:
+            idx1 = []
+            idx2 = []
+            for nd_qtm1 in self.nd_basis:
+                i = self.nd_basis[nd_qtm1]
+                l = len(nd_qtm1) - self.dim
+                delta_nd_qtm = G + tuple((0 for i in range(l)))
+                nd_qtm2 = self.qtm_minus(nd_qtm1, delta_nd_qtm)
+                j = self.nd_basis.get(nd_qtm2)
+                if j != None:
+                    idx1 = idx1 + list(range(i * num_sub, (i + 1) * num_sub))
+                    idx2 = idx2 + list(range(j * num_sub, (j + 1) * num_sub))
+            idx = idx + [eye[idx1].T @ eye[idx2]]
+        self.overlape_idx = np.asarray(idx)
+
+    @partial(jit, static_argnums=(0))
+    def mk_interaction_tensor(self):
+        delta_d_qtm_nk_list = list(set([self.qtm_minus(d_qtm_nk1, d_qtm_nk2) for d_qtm_nk1 in self.d_qtm_nk_list for d_qtm_nk2 in self.d_qtm_nk_list]))
+        print(len(delta_d_qtm_nk_list))
+        q_array = (np.array(self.fine_k_list)[:, None, None,:] - np.array(self.coarse_k_list)[None,:, None,:] + np.array(self.G_list)[None, None,:,:]).reshape((-1, 2))
+        print(len(q_array))
+        q_list = list(set([tuple(q) for q in q_array]))
+        q_array = np.asarray(q_list)
+        self.q_list = {q_list[i]:i for i in range(len(q_list))}
+        print(len(q_list))
+        interaction_tensor = {}
+        Inter = self.interaction
+        Inter_grad = jacfwd(self.interaction,argnums=(0))
+        
+        for delta_d_qtm_nk in delta_d_qtm_nk_list:
+            interaction = np.array(vmap(partial(Inter, delta_d_qtm_nk=delta_d_qtm_nk))(q_array))
+            interaction_grad = np.array(vmap(partial(Inter_grad, delta_d_qtm_nk=delta_d_qtm_nk))(q_array))
+            interaction_tensor[delta_d_qtm_nk] = np.hstack((interaction.reshape((-1,1)), interaction_grad))
+        self.interaction_tensor = interaction_tensor
+
+    @staticmethod
+    @jit
+    def overlape(wv_func_1, wv_func_2, idxs):
+        idx1, idx2 = idxs
+        wv1 = wv_func_1[idx1]
+        wv2 = wv_func_2[idx2]
+        return jnp.einsum('ji,jk->ik',wv1.conj(),wv2)
+
+    @partial(jit, static_argnums=(0))
+    def hartree(self, delta_d_qtm_nk, wv_func_1, wv_func_2):
+        #idx = list(itemgetter(*self.G_list)(self.q_list))
+        #interaction = self.interaction_tensor[delta_d_qtm_nk][idx, 0]
+        interaction = vmap(partial(self.interaction, delta_d_qtm_nk=delta_d_qtm_nk))(np.array(self.G_list))
+        overlape_1 = jnp.einsum('ei,gef,fj->gij', wv_func_1.conj(), self.overlape_idx, wv_func_1)
+        overlape_2 = jnp.einsum('ei,gef,fj->gij', wv_func_2.conj(), self.overlape_idx, wv_func_2)
+        res = jnp.einsum('g,gij,gkl->ijkl',interaction, overlape_1, overlape_2.conj())
+        return res
+    
+    @partial(jit, static_argnums=(0))
+    def fock(self, delta_k, delta_d_qtm_nk, wv_func_1, wv_func_2):
+        q_array = delta_k + np.array(self.G_list)
+        #q_list = list(set([tuple(q) for q in q_array]))
+        #idx = list(itemgetter(*q_list)(self.q_list))
+        #interaction_val_grad = self.interaction_tensor[delta_d_qtm_nk][idx]
+        interaction = vmap(partial(self.interaction, delta_d_qtm_nk=delta_d_qtm_nk))(q_array)
+        interaction_grad = vmap(partial(self.interaction_grad, delta_d_qtm_nk=delta_d_qtm_nk))(q_array)
+        interaction_val_grad = jnp.hstack((interaction.reshape((-1,1)), interaction_grad))
+        overlape = jnp.einsum('ei,gef,fj->gij', wv_func_1.conj(), self.overlape_idx, wv_func_2)
+        res_val_grad = jnp.einsum('ga,gik,gjl->ijkla', interaction_val_grad, overlape, overlape.conj())
+        return res_val_grad
+
+    @partial(jit, static_argnums=(0))
+    def W(self, delta_k, delta_d_qtm_nk, wv_func_1, wv_func_2):
+        hartree = self.hartree(delta_d_qtm_nk, wv_func_1, wv_func_2)
+        fock_val_grad = self.fock(jnp.array(delta_k), delta_d_qtm_nk, wv_func_1, wv_func_2)
+        return fock_val_grad - (hartree[:,:,:,:,None])*(np.array([1.]+[0. for i in range(self.dim)])[None,None,None,None,:])
+
+    def testW(self):
+        self.mk_hamiltonian()
+        self.solve()
+        self.mk_overlape_idx()
+        d_qtm1 = list(self.Basis.keys())[0]
+        d_qtm2 = list(self.Basis.keys())[1]
+        W = self.W(d_qtm1, d_qtm2, self.wv_funcs[d_qtm1], self.wv_funcs[d_qtm2])[0]
+        print(jnp.max(jnp.abs(W-jnp.transpose(W,(1,0,3,2)).conj())))
+
+    #@partial(jit, static_argnums=(0, 1, 2, 3))
+    def bse_solve(self, nv, nf, nc):
+        num_d_basis = self.num_d_basis
+        '''
+        wv_funcs = jnp.transpose(jnp.array([self.wv_funcs[d_qtm][:, nf - nv:nf + nc] for d_qtm in self.Basis]), axes=(1, 2, 0)).reshape((self.num_nd_bands, (nc + nv) * self.num_d_basis))
+        print("wave get")
+        I = jnp.array([self.overlape(wv_funcs, wv_funcs, self.overlape_idx[G]) for G in self.G_list]).reshape((len(self.G_list), nc + nv, self.num_d_basis, nc + nv, self.num_d_basis))  #[G,i,k1,j,k2]
+        print("overlape get")
+        hartree = jnp.array([[[self.interaction_tensor[self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[1]][G][0] for d_qtm2 in self.Basis] for d_qtm1 in self.Basis] for G in self.G_list])
+        print("hartree get")
+        fock = jnp.array([[[self.interaction_tensor[self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[1]][self.qtm_add(self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[0], G)][0] for d_qtm2 in self.Basis] for d_qtm1 in self.Basis] for G in self.G_list])
+        print("fock get")
+        fock_grad = jnp.array([[[self.interaction_tensor[self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[1]][self.qtm_add(self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[0], G)][1] for d_qtm2 in self.Basis] for d_qtm1 in self.Basis] for G in self.G_list])
+        print("fock grad get")
+        W = jnp.einsum('gst,giskt,gjslt->stijkl', fock, I, I.conj()) - jnp.einsum('gss,gisjs,gktlt->stijkl', hartree, I, I.conj())
+        print("W get")
+        W_tangents = jnp.einsum('gsta,giskt,gjslt->stijkla', fock_grad, I, I.conj())
+        print("W grad get")
+        '''
+        W_val_grad = jnp.array([[self.W(jnp.array(d_qtm1)[0:self.dim]-jnp.array(d_qtm2)[0:self.dim], self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[1], self.wv_funcs[d_qtm1][:, nf - nv:nf + nc], self.wv_funcs[d_qtm2][:, nf - nv:nf + nc]) for d_qtm2 in self.Basis] for d_qtm1 in self.Basis])  #[num_d,num_d,nv+nv,nv+nv,nv+nv,nv+nv,dim+1]
+        print(jnp.shape(W_val_grad))
+        W = W_val_grad[:,:,:,:,:,:, 0]
+        W_grad = W_val_grad[:,:,:,:,:,:, 1:]
+        self.w = W
+        self.w_grad = W_grad
+        print("W calculated")
+        H_ep_0 = jnp.array([self.vec2arr(self.energies[d_qtm]) for d_qtm in self.Basis])  #[num_d,nv+nv,nv+nv]
+        H_ep = jnp.diag(H_ep_0[:, nv:nv + nc, 0:nv].flatten()) - jnp.transpose(W, axes=(0, 2, 3, 1, 4, 5))[:, nv:nv + nc, 0:nv,:, nv:nv + nc, 0:nv].reshape((num_d_basis * nc * nv, num_d_basis * nc * nv))
+        K = jnp.transpose(W, axes=(0, 2, 3, 1, 5, 4))[:, nv:nv + nc, 0:nv,:, nv:nv + nc, 0:nv].reshape((num_d_basis * nc * nv, num_d_basis * nc * nv))
+        self.H_ep = H_ep
+        self.K = K
+        exciton_energies, exciton_wv_funcs = jnp.linalg.eigh(H_ep)
+        print("eigen solved")
+        self.exciton_energies = exciton_energies
+        self.exciton_wv_funcs = exciton_wv_funcs
+        r_cv_bare = []
+        i=0
+        for d_qtm in self.Basis:
+            k, d_qtm_nk = self.separate(d_qtm, self.dim)
+            k = jnp.array(k)
+            vel = jnp.einsum('lk,lma,mn->kna', self.wv_funcs[d_qtm].conj()[:, nf:nf + nc], self.vel_opt(k, d_qtm_nk), self.wv_funcs[d_qtm][:, nf - nv:nf])
+            r_cv_bare = r_cv_bare + [-1j * vel / H_ep_0[i][nf:nf + nc, nf - nv:nf, None]]
+            
+            i=i+1
+        self.r_cv_bare = jnp.array(r_cv_bare).reshape((num_d_basis * nc * nv, self.dim))
+        print(jnp.max(jnp.where(jnp.isnan(self.r_cv_bare), 1, 0)))
+        print("r_cv solved")
+    
+    #@partial(jit, static_argnums=(0))
+    def h_cv(self, omega):
+        G = (self.exciton_wv_funcs.conj() * ((1 / (omega + self.exciton_energies))[None,:])) @ self.exciton_wv_funcs.T
+        KG = self.K @ G
+        r_vc_bare = (self.r_cv_bare).conj()
+        y = self.r_cv_bare + KG @ r_vc_bare
+        A = omega * jnp.eye(len(G)) - self.H_ep + KG @ (self.K.conj())
+        Am = jnp.max(A)
+        ym = jnp.max(y)
+        h_cv = jnp.linalg.solve(A, y)
+        return h_cv
+    
+    #@partial(jit, static_argnums=(0, 1))
+    def mk_h_cv(self, Omega):
+        eta = 0.1
+        h_cv_o = vmap(self.h_cv)(Omega + 1j * eta)
+        h_cv_mo = vmap(self.h_cv)(-1.*Omega + 1j * eta)
+        h_cv_2o = vmap(self.h_cv)(2.*Omega - 2*1j * eta)
+        h_cv_2mo = vmap(self.h_cv)(-2.*Omega - 2 * 1j * eta)
+        self.h_cv_o = h_cv_o
+        self.h_cv_mo = h_cv_mo
+        self.h_cv_2o = h_cv_2o
+        self.h_cv_2mo = h_cv_2mo
+        print("h_cv_bar solved")
+
+    @partial(jit, static_argnums=(0, 2, 3, 4, 5, 6))
+    def shg(self, k, d_qtm_nk, Omega, nv, nf, nc):
+        eta = 0.1
+        energies, wv_func = jnp.linalg.eigh(self.hm(k, d_qtm_nk))
+        vel = jnp.einsum('lk,lma,mn->kna', wv_func.conj(), self.vel_opt(k, d_qtm_nk), wv_func)  #[nv+nc,nv+nc,dim]
+        
+        f = self.vec2arr(jnp.array([1 for i in range(nv)] + [0 for i in range(nc)]))  #[nv+nc,nv+nc]
+        epsilon = self.vec2arr(energies)  #[nv+nc,nv+nc]
+
+        r_bare = -1j * vel/epsilon[:,:,None]  #[nv+nc,nv+nc,dim]
+        r_bare = jnp.where(jnp.isinf(r_bare), 0.,r_bare)  #[nv+nc,nv+nc,dim]
+
+        delta=vmap(self.vec2arr, 1, 2)(vmap(jnp.diag, 2, 1)(vel))  #[nv+nc,nv+nc,dim]
+        
+        r_bare_gd = (jnp.einsum('ilb,lja->ijba', r_bare, vel) - jnp.einsum('ila,ljb->ijba', vel, r_bare) - delta[:,:,:, None] * r_bare[:,:, None,:]) / epsilon[:,:, None, None]
+        r_bare_gd=jnp.where(jnp.isinf(r_bare_gd), 0.,r_bare_gd)
+        
+        vel=vel[nf - nv:nf + nc, nf - nv:nf + nc,:]
+        epsilon=epsilon[nf - nv:nf + nc, nf - nv:nf + nc]
+        r_bare=r_bare[nf - nv:nf + nc, nf - nv:nf + nc,:]
+        r_bare_gd=r_bare_gd[nf - nv:nf + nc, nf - nv:nf + nc,:,:]
+        delta = delta[nf - nv:nf + nc, nf - nv:nf + nc,:]
+        
+        W_val_grad=jnp.array([self.W(k - jnp.array(self.separate(d_qtm_bar, self.dim)[0]), self.qtm_minus(d_qtm_nk, self.separate(d_qtm_bar, self.dim)[1]), wv_func[:, nf - nv:nf + nc], self.wv_funcs[d_qtm_bar][:, nf - nv:nf + nc]) for d_qtm_bar in self.Basis])
+        W = W_val_grad[:,:,:,:,:, 0]
+        W_grad = W_val_grad[:,:,:,:,:, 1:]
+        '''
+        i=self.Basis[d_qtm][0]
+        W=self.w[i]
+        W_tangents = self.w_grad[i]
+        '''
+        W=jnp.transpose(W, axes=(1, 2, 0, 3, 4))[:,:,:, nv:nv + nc, 0:nv].reshape((nv + nc, nv + nc, self.num_d_basis * nc * nv))
+        W_grad=jnp.transpose(W_grad, axes=(1, 2, 0, 3, 4, 5))[:,:,:, nv:nv + nc, 0:nv,:].reshape((nv + nc, nv + nc, self.num_d_basis * nc * nv, self.dim))
+        
+        
+        t_o = -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_o)
+        t_o_gd=1j * (jnp.einsum('ilb,olja->oijba', r_bare, t_o) - jnp.einsum('oila,ljb->oijba', t_o, r_bare)) - jnp.einsum('ijmb,oma->oijba', W_grad, self.h_cv_o)
+        
+        t_mo = -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_mo)
+        t_mo_gd=1j * (jnp.einsum('ilb,olja->oijba', r_bare, t_mo) - jnp.einsum('oila,ljb->oijba', t_mo, r_bare)) - jnp.einsum('ijmb,oma->oijba', W_grad, self.h_cv_mo)
+        
+        t=t_o + jnp.transpose(t_mo, axes=(0, 2, 1, 3)).conj()
+        t_gd=t_o_gd + jnp.transpose(t_mo_gd, axes=(0, 2, 1, 3, 4)).conj()
+        
+        r=r_bare + t  #[num_o,nc+nv,nc+nv,dim]
+        r_gd=r_bare_gd + t_gd  #[num_o,nc+nv,nc+nv,dim]
+        
+        h_o=r / (Omega[:, None, None, None] + 1j * eta - epsilon[None,:,:, None])
+        g=h_o * (f.T)[None,:,:, None]
+        g_gd=(r_gd * (f.T)[None,:,:, None, None] + delta[None,:,:,:, None] * g[:,:,:, None,:]) / (Omega[:, None, None, None, None] + 1j * eta - epsilon[None,:,:, None, None])
+        
+        t_2o= -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_2o)
+        t_2mo= -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_2mo)
+        t_2=t_2mo + jnp.transpose(t_2o, axes=(0, 2, 1, 3)).conj()
+        r_2=r_bare + t_2
+        h_2mo=r_2 / (-2.*Omega[:, None, None, None] - 2.* 1j * eta - epsilon[None,:,:, None])
+        
+        res=(jnp.transpose(h_2mo, axes=(0, 2, 1, 3))[:,:,:,:, None, None]) * ((jnp.einsum('oilb,olja->oijba', r, g) - jnp.einsum('oila,oljb->oijba', g, r) + 1j * g_gd)[:,:,:, None,:,:]) + 1j / 2.*jnp.transpose(h_o,axes=(0,2,1,3))[:,:,:,None,:,None]*g_gd[:,:,:,:,None,:]
+        
+        return -jnp.sum(res, axis=(1, 2))
+
+    def SHG(self, Omega, nv, nf, nc, k_mesh_fined_multiples = 1):
+        num_O = len(Omega)
+        self.G_list = list(set(map(lambda nd_qtm: self.separate(nd_qtm, self.dim)[0], self.nd_basis)))
+        d_qtm_list = list(self.Basis.keys())
+        self.coarse_k_list = list(set(map(lambda d_qtm: self.separate(d_qtm, self.dim)[0], d_qtm_list)))
+        self.d_qtm_nk_list = list(set(map(lambda d_qtm: self.separate(d_qtm, self.dim)[1], d_qtm_list)))
+        k_mesh_fined_multiples = tuple(np.ones(self.dim, dtype=np.int32) * k_mesh_fined_multiples)
+        if k_mesh_fined_multiples == tuple((1 for i in range(self.dim))):
+            self.fine_k_list = self.coarse_k_list
+        else:
+            fine_k_list = [[]]
+            for i in range(self.dim):
+                fine_k_list = [fine_k + [self.kstart[i] + n / self.real_shape[i] / k_mesh_fined_multiples[i]] for fine_k in fine_k_list for n in range(self.real_shape[i] * k_mesh_fined_multiples[i])]
+            self.fine_k_list = fine_k_list
+        self.interaction_grad = jacfwd(self.interaction, argnums=(0))
+        self.vel_opt = jacfwd(self.hm,argnums=(0))
+        self.mk_hamiltonian()
+        self.solve()
+        self.mk_overlape_idx()
+        print("overlape index make")
+        #self.mk_interaction_tensor()
+        #print("interaction tensor make")
+        self.bse_solve(nv, nf, nc)
+        self.mk_h_cv(Omega)
+        
+        res = np.zeros((num_O, self.dim, self.dim, self.dim), dtype=np.complex128)
+        flag = 0
+        for d_qtm_nk in self.d_qtm_nk_list:
+            for k in self.fine_k_list:
+                print(flag)
+                flag = flag + 1
+                k = jnp.array(k)
+                resp = self.shg(k, d_qtm_nk, Omega, nv, nf, nc)
+                res = res + np.array(resp)
+                
+
+        plt.plot(Omega, jnp.abs(res[:,0,0,0])/flag)
+        plt.savefig("temp_shg_exc_aug.pdf")
+        plt.show()
+    
+
     @partial(jit, static_argnums=(0,2,3,4))
     def shg_ipa(self, k, d_qtm_nk, Omega, bd_range):
-        eta = 0.001
+        eta = 0.03
         bot, top = bd_range
         eigval, wvfunc = jnp.linalg.eigh(self.hm(k, d_qtm_nk))
-        Vel = jacfwd(self.hm, argnums=(0))(k, d_qtm_nk)
-        vel = jnp.einsum('lk,lma,mn->kna', wvfunc.conj()[:, bot:top], Vel, wvfunc[:, bot:top])  #[bd_range,bd_range,dim]
+        vel = jnp.einsum('lk,lma,mn->kna', wvfunc.conj(), self.vel_opt(k, d_qtm_nk), wvfunc)  #[bd_range,bd_range,dim]
 
-        dist = jnp.where(eigval[bot:top] > 0., 0, 1)
+        dist = jnp.where(eigval > 0., 0, 1)
         d_dist = self.vec2arr(dist)  #[bd_range,bd_range]
-        d_en = self.vec2arr(eigval[bot:top])  #[bd_range,bd_range]
+        d_en = self.vec2arr(eigval)  #[bd_range,bd_range]
 
         r_inter = -1j * vel/d_en[:,:,None]  #[bd_range,bd_range,dim]
         r_inter = jnp.where(jnp.isinf(r_inter), 0.,r_inter)  #[bd_range,bd_range,dim]
@@ -115,7 +392,13 @@ class Lattice(Quantum):
         d_en_jac = vmap(self.vec2arr, 1, 2)(vmap(jnp.diag,2,1)(vel))  #[bd_range,bd_range,dim]
         
         r_inter_gd = (r_inter[:,:,:, None] * jnp.transpose(d_en_jac, axes=(1, 0, 2))[:,:, None,:] + r_inter[:,:, None,:] * (jnp.transpose(d_en_jac, axes=(1, 0, 2))[:,:,:, None]) + 1j * jnp.einsum('nla,lmb->nmab', r_inter, r_inter * d_en[:,:, None]) - 1j * jnp.einsum('nlb,lma->nmab', r_inter * d_en[:,:, None], r_inter)) / d_en[:,:, None, None]
-        r_inter_gd = jnp.where(jnp.isinf(r_inter_gd), 0.,r_inter_gd)  #[bd_range,bd_range,dim,dim]
+        r_inter_gd=jnp.where(jnp.isinf(r_inter_gd), 0.,r_inter_gd)  #[bd_range,bd_range,dim,dim]
+        
+        r_inter=r_inter[bot:top, bot:top,:]
+        r_inter_gd=r_inter_gd[bot:top, bot:top,:,:]
+        d_en=d_en[bot:top, bot:top]
+        d_en_jac = d_en_jac[bot:top,bot:top,:]
+        d_dist = d_dist[bot:top,bot:top]
 
         f = r_inter[None,:,:,:] / (Omega[:,None,None,None] + 1j * eta - d_en[None,:,:,None])  #[nOmega,bd_range,bd_range,dim]
         h = r_inter[None,:,:,:] / (2 * Omega[:, None, None, None] + 2 * 1j * eta + d_en[None,:,:, None])  #[nOmega,bd_range,bd_range,dim]
@@ -127,16 +410,12 @@ class Lattice(Quantum):
         res = jnp.transpose(h, (0, 2, 1, 3))[:,:,:,:, None, None] * rg[:,:,:, None,:,:] - 1j / 2 * jnp.transpose(f, (0, 2, 1, 3))[:,:,:, None, None,:] * g_gd[:,:,:,:,:, None]  #[nOmega,bd_range,bd_range,dim,dim,dim]
         return jnp.sum(res, axis=(1, 2))
 
-    def mk_hamiltonian(self):
-        hamiltonian = {}
-        for d_qtm in self.Basis:
-            k, d_qtm_nk = self.separate(d_qtm, self.dim)
-            hamiltonian[d_qtm] = self.hm(k, d_qtm_nk)
-        self.hamiltonian = hamiltonian
+    
 
     def SHG_ipa(self, Omega, bd_range):
         dim = self.dim
         num_O = len(Omega)
+        self.vel_opt = jacfwd(self.hm,argnums=(0))
         res = jnp.zeros((num_O, dim, dim, dim), dtype=jnp.complex64)
         flag = 0
         for d_qtm in self.Basis:

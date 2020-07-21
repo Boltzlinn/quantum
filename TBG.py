@@ -61,7 +61,7 @@ def TBG():
         return res
     tbg.ext_potential = ext_potential
     tbg.mk_V()
-    Omega = jnp.linspace(0,0.2,300)
+    Omega = np.linspace(0,0.2,300)
     tbg.SHG_ipa(Omega, [38,62])
 
     # tbg.mk_hamiltonian()

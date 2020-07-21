@@ -42,15 +42,21 @@ class Quantum:
     def hopping_func(d_qtm, nd_qtm1, delta_nd_qtm):
         pass
 
-    def nd_qtm_add(self, nd_qtm1, delta_nd_qtm):
-        nd_qtm2 = tuple(np.array(nd_qtm1) + np.array(delta_nd_qtm))
-        j = self.nd_basis.get(nd_qtm2)
-        return nd_qtm2, j
+    @staticmethod
+    def qtm_add(qtm1, qtm2):
+        res = ()
+        l = len(qtm1)
+        if l != 0:
+            res = tuple((qtm1[i]+qtm2[i] for i in range(l)))
+        return res
     
-    def nd_qtm_minus(self, nd_qtm1, delta_nd_qtm):
-        nd_qtm2 = tuple(np.array(nd_qtm1) - np.array(delta_nd_qtm))
-        j = self.nd_basis.get(nd_qtm2)
-        return nd_qtm2, j
+    @staticmethod
+    def qtm_minus(qtm1, qtm2):
+        res = ()
+        l = len(qtm1)
+        if l != 0:
+            res = tuple((qtm1[i]-qtm2[i] for i in range(l)))
+        return res
 
     def mk_basis(self, diag_qtm_nums, ndiag_qtm_nums):
         self.diag_qtm_nums.update(diag_qtm_nums)
@@ -58,6 +64,7 @@ class Quantum:
             self.diag_qtm_nums = {'anon.': [0]}
         self.ndiag_qtm_nums.update(ndiag_qtm_nums)
         self.num_d_qtm = tuple(map(len, self.diag_qtm_nums.values()))
+        self.num_d_basis = int(np.product(self.num_d_qtm))
         self.num_nd_qtm = tuple(map(len, self.ndiag_qtm_nums.values()))
         self.num_nd_basis = int(np.product(self.num_nd_qtm))
         self.num_nd_bands = self.num_nd_basis * self.num_sub
@@ -107,7 +114,8 @@ class Quantum:
             i = 0
             for nd_qtm1 in basis:
                 i = basis[nd_qtm1]
-                j = self.nd_qtm_minus(nd_qtm1, delta_nd_qtm)[1]
+                nd_qtm2 = self.qtm_minus(nd_qtm1, delta_nd_qtm)
+                j = self.nd_basis.get(nd_qtm2)
                 if j != None:
                     res[i * num_sub : (i + 1) * num_sub, j * num_sub : (j + 1) * num_sub] = hopping_func(d_qtm, nd_qtm1, delta_nd_qtm)
                 i = i + 1
@@ -133,15 +141,15 @@ class Quantum:
                 self.hamiltonian[diag_idx])
             eigen_energies[diag_idx] = eigs
             eigen_wvfuncs[diag_idx] = eigvecs
-        self.eigen_energies = eigen_energies
-        self.eigen_wvfuncs = eigen_wvfuncs
+        self.energies = eigen_energies
+        self.wv_funcs = eigen_wvfuncs
 
     def print_eigen_energies(self):
         print("The eigen energies of " +
               str(tuple(self.diag_qtm_nums.keys()))+" is:")
-        for diag_idx in self.eigen_energies:
+        for diag_idx in self.energies:
             print(diag_idx)
-            print(self.eigen_energies[diag_idx])
+            print(self.energies[diag_idx])
 
 
 def test_Quantum():
