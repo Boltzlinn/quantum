@@ -24,7 +24,8 @@ def hBN():
     Va = np.array([8.007, 0, 3.697])
     @jit
     def kinetic(k, d_qtm_nk, nd_qtm):
-        return Redberg * aH ** 2 * jnp.linalg.norm((k + jnp.array(nd_qtm)) @ bvec)** 2
+        kvec = (k + jnp.array(nd_qtm)) @ bvec
+        return Redberg * aH ** 2 * (kvec @ kvec.T)
     hBN.kinetic = kinetic
 
     def ext_potential(d_qtm_nk, delta_nd_qtm):
