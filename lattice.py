@@ -164,8 +164,6 @@ class Lattice(Quantum):
 
     @partial(jit, static_argnums=(0))
     def hartree(self, delta_d_qtm_nk, wv_func_1, wv_func_2):
-        #idx = list(itemgetter(*self.G_list)(self.q_list))
-        #interaction = self.interaction_tensor[delta_d_qtm_nk][idx, 0]
         interaction = vmap(partial(self.interaction, delta_d_qtm_nk=delta_d_qtm_nk))(np.array(self.G_list))
         overlape_1 = jnp.einsum('ei,gef,fj->gij', wv_func_1.conj(), self.overlape_idx, wv_func_1)
         overlape_2 = jnp.einsum('ei,gef,fj->gij', wv_func_2.conj(), self.overlape_idx, wv_func_2)
@@ -175,9 +173,6 @@ class Lattice(Quantum):
     @partial(jit, static_argnums=(0))
     def fock(self, delta_k, delta_d_qtm_nk, wv_func_1, wv_func_2):
         q_array = delta_k + np.array(self.G_list)
-        #q_list = list(set([tuple(q) for q in q_array]))
-        #idx = list(itemgetter(*q_list)(self.q_list))
-        #interaction_val_grad = self.interaction_tensor[delta_d_qtm_nk][idx]
         interaction = vmap(partial(self.interaction, delta_d_qtm_nk=delta_d_qtm_nk))(q_array)
         interaction_grad = vmap(partial(self.interaction_grad, delta_d_qtm_nk=delta_d_qtm_nk))(q_array)
         interaction_val_grad = jnp.hstack((interaction.reshape((-1,1)), interaction_grad))
@@ -222,9 +217,6 @@ class Lattice(Quantum):
         W_val_grad = jnp.array([[self.W(jnp.array(d_qtm1)[0:self.dim]-jnp.array(d_qtm2)[0:self.dim], self.separate(self.qtm_minus(d_qtm1, d_qtm2), self.dim)[1], self.wv_funcs[d_qtm1][:, nf - nv:nf + nc], self.wv_funcs[d_qtm2][:, nf - nv:nf + nc]) for d_qtm2 in self.Basis] for d_qtm1 in self.Basis])  #[num_d,num_d,nv+nv,nv+nv,nv+nv,nv+nv,dim+1]
         print(jnp.shape(W_val_grad))
         W = W_val_grad[:,:,:,:,:,:, 0]
-        W_grad = W_val_grad[:,:,:,:,:,:, 1:]
-        self.w = W
-        self.w_grad = W_grad
         print("W calculated")
         H_ep_0 = jnp.array([self.vec2arr(self.energies[d_qtm]) for d_qtm in self.Basis])  #[num_d,nv+nv,nv+nv]
         H_ep = jnp.diag(H_ep_0[:, nv:nv + nc, 0:nv].flatten()) - jnp.transpose(W, axes=(0, 2, 3, 1, 4, 5))[:, nv:nv + nc, 0:nv,:, nv:nv + nc, 0:nv].reshape((num_d_basis * nc * nv, num_d_basis * nc * nv))
@@ -248,19 +240,17 @@ class Lattice(Quantum):
         print(jnp.max(jnp.where(jnp.isnan(self.r_cv_bare), 1, 0)))
         print("r_cv solved")
     
-    #@partial(jit, static_argnums=(0))
+    @partial(jit, static_argnums=(0))
     def h_cv(self, omega):
         G = (self.exciton_wv_funcs.conj() * ((1 / (omega + self.exciton_energies))[None,:])) @ self.exciton_wv_funcs.T
         KG = self.K @ G
         r_vc_bare = (self.r_cv_bare).conj()
-        y = self.r_cv_bare + KG @ r_vc_bare
-        A = omega * jnp.eye(len(G)) - self.H_ep + KG @ (self.K.conj())
-        Am = jnp.max(A)
-        ym = jnp.max(y)
+        y = self.r_cv_bare
+        A = omega * jnp.eye(len(G)) - self.H_ep
         h_cv = jnp.linalg.solve(A, y)
         return h_cv
     
-    #@partial(jit, static_argnums=(0, 1))
+    @partial(jit, static_argnums=(0, 1))
     def mk_h_cv(self, Omega):
         eta = 0.1
         h_cv_o = vmap(self.h_cv)(Omega + 1j * eta)
@@ -297,21 +287,21 @@ class Lattice(Quantum):
         delta = delta[nf - nv:nf + nc, nf - nv:nf + nc,:]
         
         W_val_grad=jnp.array([self.W(k - jnp.array(self.separate(d_qtm_bar, self.dim)[0]), self.qtm_minus(d_qtm_nk, self.separate(d_qtm_bar, self.dim)[1]), wv_func[:, nf - nv:nf + nc], self.wv_funcs[d_qtm_bar][:, nf - nv:nf + nc]) for d_qtm_bar in self.Basis])
-        W = W_val_grad[:,:,:,:,:, 0]
-        W_grad = W_val_grad[:,:,:,:,:, 1:]
+        w_val_grad=jnp.transpose(W_val_grad, axes=(1, 2, 0, 3, 4, 5))[:,:,:, nv:nv + nc, 0:nv,:].reshape((nv + nc, nv + nc, self.num_d_basis * nc * nv, self.dim + 1))
+        W = w_val_grad[:,:,:, 0]
+        W_grad = w_val_grad[:,:,:, 1:]
         '''
         i=self.Basis[d_qtm][0]
         W=self.w[i]
         W_tangents = self.w_grad[i]
-        '''
-        W=jnp.transpose(W, axes=(1, 2, 0, 3, 4))[:,:,:, nv:nv + nc, 0:nv].reshape((nv + nc, nv + nc, self.num_d_basis * nc * nv))
-        W_grad=jnp.transpose(W_grad, axes=(1, 2, 0, 3, 4, 5))[:,:,:, nv:nv + nc, 0:nv,:].reshape((nv + nc, nv + nc, self.num_d_basis * nc * nv, self.dim))
+        '''        
         
-        
-        t_o = -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_o)
+        t_o= -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_o)
+        t_o=t_o*jnp.abs(f)[None,:,:,None]
         t_o_gd=1j * (jnp.einsum('ilb,olja->oijba', r_bare, t_o) - jnp.einsum('oila,ljb->oijba', t_o, r_bare)) - jnp.einsum('ijmb,oma->oijba', W_grad, self.h_cv_o)
         
-        t_mo = -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_mo)
+        t_mo= -1.* jnp.einsum('ijm,oma->oija', W, self.h_cv_mo)
+        t_mo=t_mo * jnp.abs(f)[None,:,:, None]
         t_mo_gd=1j * (jnp.einsum('ilb,olja->oijba', r_bare, t_mo) - jnp.einsum('oila,ljb->oijba', t_mo, r_bare)) - jnp.einsum('ijmb,oma->oijba', W_grad, self.h_cv_mo)
         
         t=t_o + jnp.transpose(t_mo, axes=(0, 2, 1, 3)).conj()
@@ -370,9 +360,9 @@ class Lattice(Quantum):
                 res = res + np.array(resp)
                 
 
-        plt.plot(Omega, jnp.abs(res[:,0,0,0])/flag)
+        plt.plot(Omega, jnp.abs(res[:,0,0,0])/flag*Omega)
         plt.savefig("temp_shg_exc_aug.pdf")
-        plt.show()
+        #plt.show()
     
 
     @partial(jit, static_argnums=(0,2,3,4))
