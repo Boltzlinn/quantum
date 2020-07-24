@@ -90,6 +90,8 @@ class Quantum:
             Basis[tuple(diag_idx)] = (i, basis)
             i = i+1
         self.Basis = Basis
+        self.d_qtm_list = list(self.Basis.keys())
+        self.d_qtm_array = jnp.array(self.d_qtm_list)
 
     def print_basis(self):
         diag_keys = list(self.diag_qtm_nums.keys())
@@ -134,15 +136,15 @@ class Quantum:
             print(jnp.round(self.hamiltonian[diag_idx], decimals=3)[0:4])
 
     def solve(self):
-        eigen_energies = {}
-        eigen_wvfuncs = {}
+        eigen_energies = []
+        eigen_wvfuncs = []
         for diag_idx in self.hamiltonian:
             eigs, eigvecs = jnp.linalg.eigh(
                 self.hamiltonian[diag_idx])
-            eigen_energies[diag_idx] = eigs
-            eigen_wvfuncs[diag_idx] = eigvecs
-        self.energies = eigen_energies
-        self.wv_funcs = eigen_wvfuncs
+            eigen_energies = eigen_energies + [eigs]
+            eigen_wvfuncs = eigen_wvfuncs + [eigvecs]
+        self.energies = jnp.asarray(eigen_energies)
+        self.wv_funcs = jnp.asarray(eigen_wvfuncs)
 
     def print_eigen_energies(self):
         print("The eigen energies of " +
