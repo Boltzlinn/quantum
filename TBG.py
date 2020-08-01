@@ -18,11 +18,9 @@ def TBG():
     u0P = 0.0975
     mass = 0.015
     dim = 2
-    avec = np.array(
-        [[a*1.5, a*0.5*sqrt_3], [a*1.5, -a*0.5*sqrt_3]], np.float32)
-    bvec = np.array([[(2.0 * Pi) / (3.0 * a), (2.0 * Pi) / (sqrt_3 * a)],
-                      [(2.0 * Pi) / (3.0 * a), -(2.0 * Pi) / (sqrt_3 * a)]], np.float32)
-    num_k1 = 100
+    avec = np.array([[a * 1.5, a * 0.5 * sqrt_3], [a * 1.5, -a * 0.5 * sqrt_3]], np.float32)
+    bvec = np.array([[(2.0 * Pi) / (3.0 * a), (2.0 * Pi) / (sqrt_3 * a)], [(2.0 * Pi) / (3.0 * a), -(2.0 * Pi) / (sqrt_3 * a)]], np.float32)
+    num_k1 = 32
     hoppings = ((0, 0), (1, 0), (-1, 0), (0, -1), (0, 1))
     special_pts = {"$G$": (0., 0.), "$M_1$": (0.5, 0.), "$M_2$": (
         0., 0.5), "$M_3$": (0.5, 0.5), "$K_1$": (1./3., 2./3.), "$K_2$": (2./3., 1./3.)}
@@ -61,8 +59,21 @@ def TBG():
         return res
     tbg.ext_potential = ext_potential
     tbg.mk_V()
-    Omega = np.linspace(0,0.2,300)
-    tbg.SHG_ipa(Omega, [38,62])
+
+    epsilon = 2
+    Kappa = 0.005
+    Uvalue = 0.1071/epsilon  ## Uvalue=e^2/(4*pi*epsilon0*Ls) 
+    Jvalue = 0.0017/epsilon ## Jvalue = Uvalue*(qM/|K-K'|)
+    qM = 4*Pi/(np.sqrt(3.0)*Ls)
+    @jit
+    def interaction(q, d_qtm_nk1, d_qtm_nk2):
+        q_norm = jnp.linalg.norm(q @ bvec)
+        flag = jnp.all(d_qtm_nk1==d_qtm_nk2)
+        res = jnp.where(q_norm == 0., 0., jnp.where(flag, Uvalue * qM / jnp.sqrt(q_norm ** 2 + Kappa ** 2), Jvalue))
+        return res/num_k1**2
+    tbg.interaction = interaction
+    Omega = np.linspace(0,0.2,200)
+    tbg.SHG(Omega, 2, 50, 2, eta=0.002)
 
     # tbg.mk_hamiltonian()
     # tbg.print_hamiltonian()
