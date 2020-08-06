@@ -18,7 +18,7 @@ def hBN():
     bvec = np.array([[(2.0 * Pi) / (sqrt_3 * a), (2.0 * Pi) / a], [(2.0 * Pi) / (sqrt_3 * a), -(2.0 * Pi) / a]], np.float32)
     hoppings = tuple([(G1, G2) for G1 in range(-3, 4) for G2 in range(-3, 4) if G1 ** 2 + G2 ** 2 - G1 * G2 <= 4])
     special_pts = {"$G$": (0., 0.), "$M$": (0.5, 0.5), "$K$": (1./3., 2./3.)}
-    num_k1 = 72
+    num_k1 = 64
     hBN = Lattice(2, avec, bvec, real_shape=num_k1, kstart=(0.5 / num_k1 - 0.5, 0.5 / num_k1 - 0.5), bz_shape=5, special_pts=special_pts, hoppings=hoppings)
     hBN.mk_basis({},{})
     Vs = np.array([10.785, 1.472, 7.8])
@@ -61,4 +61,7 @@ def hBN():
 
 
 if __name__ == "__main__":
+    t0=time.perf_counter()
     hBN()
+    t1 = time.perf_counter()
+    print('total time is',t1-t0)

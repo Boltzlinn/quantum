@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from jax import jacfwd, jit
+from jax import jacfwd, jit, vmap
 import numpy as np
 from functools import partial
 
@@ -92,6 +92,7 @@ class Quantum:
         self.Basis = Basis
         self.d_qtm_list = list(self.Basis.keys())
         self.d_qtm_array = jnp.array(self.d_qtm_list)
+        print('basis made')
 
     def print_basis(self):
         diag_keys = list(self.diag_qtm_nums.keys())
@@ -124,27 +125,20 @@ class Quantum:
         return jnp.asarray(res)
 
     def mk_hamiltonian(self):
-        hamiltonian = {}
-        for d_qtm in self.Basis:
-            hamiltonian[d_qtm] = self.hm(d_qtm)
-        self.hamiltonian = hamiltonian
+        self.hamiltonian = np.array([self.hm(d_qtm) for d_qtm in self.Basis])
+        print('non-interacting hamiltonian made')
 
     def print_hamiltonian(self):
         print("The Hamiltonian of "+str(tuple(self.diag_qtm_nums.keys()))+" is:")
-        for diag_idx in self.hamiltonian:
+        for diag_idx, hm in zip(self.Basis, self.hamiltonian):
             print(diag_idx)
-            print(jnp.round(self.hamiltonian[diag_idx], decimals=3)[0:4])
+            print(jnp.round(hm, decimals=3)[0:4])
 
     def solve(self):
-        eigen_energies = []
-        eigen_wvfuncs = []
-        for diag_idx in self.hamiltonian:
-            eigs, eigvecs = jnp.linalg.eigh(
-                self.hamiltonian[diag_idx])
-            eigen_energies = eigen_energies + [eigs]
-            eigen_wvfuncs = eigen_wvfuncs + [eigvecs]
-        self.energies = jnp.asarray(eigen_energies)
-        self.wv_funcs = jnp.asarray(eigen_wvfuncs)
+        eigen_energies, eigen_wvfuncs = vmap(jnp.linalg.eigh)(self.hamiltonian)
+        self.energies = np.asarray(eigen_energies)
+        self.wv_funcs = np.asarray(eigen_wvfuncs)
+        print('non-interacting solved')
 
     def print_eigen_energies(self):
         print("The eigen energies of " +
