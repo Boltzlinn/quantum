@@ -12,20 +12,17 @@ sigmam = np.array([[0., 0.], [1., 0.]], dtype=np.complex64)
 
 sigma = np.array([sigma0, sigmax, sigmay, sigmaz, sigmap, sigmam])
 
-
-def p_mat(i, j, N):
-    res = np.zeros((N, N), dtype=np.complex64)
-    res[i, j] = 1.
-    return jnp.asarray(res)
-
+def commutator(A, B):
+    return A @ B - B @ A
 
 class Quantum:
 
-    def __init__(self, ifspin=0, ifmagnetic=0, hoppings=(), num_sub=1):
+    def __init__(self, ifspin=0, ifmagnetic=0, hoppings=(), num_sub=1, num_el = 0):
         self.diag_qtm_nums = {}
         self.ndiag_qtm_nums = {}
         self.hoppings = hoppings
         self.num_sub = num_sub
+        self.num_el = num_el
         if ifspin:
             if ifmagnetic:
                 self.ndiag_qtm_nums['spin'] = [-0.5, 0.5]
@@ -90,9 +87,12 @@ class Quantum:
             Basis[tuple(diag_idx)] = (i, basis)
             i = i+1
         self.Basis = Basis
-        self.d_qtm_list = list(self.Basis.keys())
-        self.d_qtm_array = jnp.array(self.d_qtm_list)
+        self.basis_to_arr()
         print('basis made')
+
+    def basis_to_arr(self):
+        self.d_qtm_list = list(self.Basis.keys())
+        self.d_qtm_array = np.array(self.d_qtm_list,dtype=np.float32)
 
     def print_basis(self):
         diag_keys = list(self.diag_qtm_nums.keys())
@@ -125,7 +125,7 @@ class Quantum:
         return jnp.asarray(res)
 
     def mk_hamiltonian(self):
-        self.hamiltonian = np.array([self.hm(d_qtm) for d_qtm in self.Basis])
+        self.hamiltonian = np.array([self.hm(d_qtm) for d_qtm in self.Basis], dtype=np.complex64)
         print('non-interacting hamiltonian made')
 
     def print_hamiltonian(self):
@@ -136,9 +136,24 @@ class Quantum:
 
     def solve(self):
         eigen_energies, eigen_wvfuncs = vmap(jnp.linalg.eigh)(self.hamiltonian)
-        self.energies = np.asarray(eigen_energies)
-        self.wv_funcs = np.asarray(eigen_wvfuncs)
+        self.energies = np.asarray(eigen_energies, dtype=np.float32)
+        self.wv_funcs = np.asarray(eigen_wvfuncs, dtype=np.complex64)
         print('non-interacting solved')
+
+    def get_rho(self):
+        num_el = self.num_el * len(self.energies)
+        energies = self.energies.ravel()
+        idx = np.argsort(energies)
+        ef = energies[idx[num_el - 1]]
+        n_ef = np.where(self.energies == ef, 1, 0)
+        n_less = np.where(self.energies < ef, 1, 0)
+        n_shell =  num_el - np.sum(n_less)
+        if n_shell != np.sum(n_ef):
+            n_ef = n_ef * n_shell / np.sum(n_ef)
+            print('Open shell!')
+        rho = n_less + n_ef
+        self.rho = rho
+        
 
     def print_eigen_energies(self):
         print("The eigen energies of " +

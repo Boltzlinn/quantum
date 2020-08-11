@@ -5,6 +5,7 @@ import numpy as np
 from jax import jacfwd, jit
 from functools import partial
 import time
+from response import SHG
 
 def hBN():
     sqrt_3 = np.sqrt(3.0)
@@ -19,15 +20,15 @@ def hBN():
     hoppings = tuple([(G1, G2) for G1 in range(-3, 4) for G2 in range(-3, 4) if G1 ** 2 + G2 ** 2 - G1 * G2 <= 4])
     special_pts = {"$G$": (0., 0.), "$M$": (0.5, 0.5), "$K$": (1./3., 2./3.)}
     num_k1 = 64
-    hBN = Lattice(2, avec, bvec, real_shape=num_k1, kstart=(0.5 / num_k1 - 0.5, 0.5 / num_k1 - 0.5), bz_shape=5, special_pts=special_pts, hoppings=hoppings)
+    hBN = Lattice(2, avec, bvec, real_shape=num_k1, kstart=(0.5 / num_k1 - 0.5, 0.5 / num_k1 - 0.5), bz_shape=5, special_pts=special_pts, hoppings=hoppings, name='hbn')
     hBN.mk_basis({},{})
     Vs = np.array([10.785, 1.472, 7.8])
     Va = np.array([8.007, 0, 3.697])
-    @jit
+    #@jit
     def kinetic(k, d_qtm_nk, nd_qtm):
         kvec = (k + jnp.array(nd_qtm)) @ bvec
         return Redberg * aH ** 2 * (kvec @ kvec.T)
-    hBN.kinetic = kinetic
+    hBN.set_kinetic(kinetic)
 
     def ext_potential(d_qtm_nk, delta_nd_qtm):
         G1, G2 = delta_nd_qtm
@@ -42,26 +43,32 @@ def hBN():
             res = Vs[2] * np.cos(phase) + 1j * Va[2] * np.sin(phase)
         return res
         
-    hBN.ext_potential = ext_potential
+    hBN.set_ext_potential(ext_potential)
     hBN.mk_V()
 
-    @jit
+    #@jit
     def interaction(q, d_qtm_nk1, d_qtm_nk2):
         q_norm = jnp.linalg.norm(q @ bvec)
         res = jnp.where(q_norm == 0., 0., 2 * Redberg * aH * 2 * Pi / q_norm / (1. + 10. * q_norm) / num_k1 ** 2 / vcell)
         return res
     
-    hBN.interaction = interaction
+    hBN.set_interaction(interaction)
     #hBN.plot_bands(["$G$", "$M$", "$K$"], num_pts=300, close=True)
     Omega = np.linspace(0,12,200)
-    hBN.SHG(Omega, 1, 1, 1)
+    SHG(hBN, Omega, 1, 1, 1)
     #hBN.SHG_ipa(Omega,[0,5])
     #print(hBN.hm(jnp.array((0.,0.)),()))
     #hBN.bse_solve(1,1,5)
 
 
 if __name__ == "__main__":
-    t0=time.perf_counter()
+    t0 = time.perf_counter()
+    import cProfile, pstats
+    pr = cProfile.Profile()
+    pr.enable()
     hBN()
+    pr.disable()
+    pr.dump_stats("pipeline.prof")
+    
     t1 = time.perf_counter()
     print('total time is',t1-t0)
