@@ -107,35 +107,34 @@ class Lattice(Quantum):
         return jnp.asarray(T + self.V[d_qtm_nk])
 
     def mk_hamiltonian(self):
-        def task(d_qtm):
+        hamiltonian = []
+        for d_qtm in self.Basis:
             k, d_qtm_nk = self.separate(d_qtm, self.dim)
-            return self.hm(np.array(k), d_qtm_nk)
-        hamiltonian = np.array([task(d_qtm) for d_qtm in self.Basis])
-        self.hamiltonian = np.array(hamiltonian, dtype=np.complex64)
+            hamiltonian += [self.hm(np.asarray(k,dtype=np.float32), d_qtm_nk)]
+        self.hamiltonian = np.asarray(hamiltonian, dtype=np.complex64)
         print('non-interacting hamiltonian made')
 
     #@partial(jit, static_argnums=(0,1,2,3))
     def mk_r_bare(self, nv, nf, nc):
-        vel_opt = jacfwd(self.hm,argnums=(0))
-        def task(d_qtm):
+        vel_opt = jit(jacfwd(self.hm, argnums=(0)))
+        vel_plane_wave = []
+        for d_qtm in self.Basis:
             k, d_qtm_nk = self.separate(d_qtm, self.dim)
-            return vel_opt(np.array(k), d_qtm_nk)
-        vel_plane_wave = np.array([task(d_qtm) for d_qtm in self.Basis])
-        vel_plane_wave = np.transpose(vel_plane_wave, axes=(3,0,1,2))
+            vel_plane_wave += [vel_opt(np.asarray(k,dtype=np.float32), d_qtm_nk)]
+        vel_plane_wave = np.transpose(np.asarray(vel_plane_wave, dtype=np.complex64), axes=(3, 0, 1, 2))
         vel = np.transpose(self.wv_funcs.conj(), axes=(0,2,1)) @ vel_plane_wave @ self.wv_funcs #asij
-        #vel = jnp.einsum('slk,slma,smn->askn', self.wv_funcs.conj(), vel_plane_wave, self.wv_funcs)
         epsilon = self.energies[:,:, None] - self.energies[:, None]
-        epsilon_inv = np.array(1./(epsilon + np.diag(np.inf * np.ones((self.num_nd_bands)))), dtype=np.float32)
+        epsilon_inv = np.asarray(1./(epsilon + np.diag(np.inf * np.ones((self.num_nd_bands)))), dtype=np.float32)
         r_bare = -1j * vel * epsilon_inv
         energies_grad=np.einsum('asii->asi', vel)
         epsilon_gd=energies_grad[:,:,:, None] - energies_grad[:,:, None,:]  #asij
         r_bare_gd=(commutator(r_bare[:, None], vel) - epsilon_gd[:, None] * r_bare) * epsilon_inv
-        r_bare=np.array(np.transpose(r_bare[:,:, nf - nv:nf + nc, nf - nv:nf + nc], axes=(1, 2, 3, 0)), order='C')
-        r_bare_cv=np.array(r_bare[:, nv:nv + nc, 0:nv].reshape((-1, self.dim)), order='C')
-        self.r_bare=np.transpose(r_bare, axes=(3, 0, 1, 2))
-        self.r_bare_gd=r_bare_gd[:,:,:, nf - nv:nf + nc, nf - nv:nf + nc]
-        self.epsilon=epsilon[:, nf - nv:nf + nc, nf - nv:nf + nc]
-        self.epsilon_gd=epsilon_gd[:,:, nf - nv:nf + nc, nf - nv:nf + nc]
+        r_bare=np.transpose(r_bare[:,:, nf - nv:nf + nc, nf - nv:nf + nc], axes=(1, 2, 3, 0))
+        r_bare_cv=np.asarray(r_bare[:, nv:nv + nc, 0:nv].reshape((-1, self.dim)), order='C')
+        self.r_bare=np.asarray(np.transpose(r_bare, axes=(3, 0, 1, 2)),order='F')
+        self.r_bare_gd=np.asarray(r_bare_gd[:,:,:, nf - nv:nf + nc, nf - nv:nf + nc],order='F')
+        self.epsilon=np.asarray(epsilon[:, nf - nv:nf + nc, nf - nv:nf + nc],order='F')
+        self.epsilon_gd=np.asarray(epsilon_gd[:,:, nf - nv:nf + nc, nf - nv:nf + nc],order='F')
         self.r_bare_cv=r_bare_cv
         print("r_bare solved")
 

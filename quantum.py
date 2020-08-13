@@ -13,7 +13,7 @@ sigmam = np.array([[0., 0.], [1., 0.]], dtype=np.complex64)
 sigma = np.array([sigma0, sigmax, sigmay, sigmaz, sigmap, sigmam])
 
 def commutator(A, B):
-    return A @ B - B @ A
+    return np.matmul(A, B) - np.matmul(B, A)
 
 class Quantum:
 
@@ -135,7 +135,7 @@ class Quantum:
             print(jnp.round(hm, decimals=3)[0:4])
 
     def solve(self):
-        eigen_energies, eigen_wvfuncs = vmap(jnp.linalg.eigh)(self.hamiltonian)
+        eigen_energies, eigen_wvfuncs = jit(vmap(jnp.linalg.eigh))(self.hamiltonian)
         self.energies = np.asarray(eigen_energies, dtype=np.float32)
         self.wv_funcs = np.asarray(eigen_wvfuncs, dtype=np.complex64)
         print('non-interacting solved')

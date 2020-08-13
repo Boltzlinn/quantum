@@ -54,7 +54,7 @@ def hBN():
     
     hBN.set_interaction(interaction)
     #hBN.plot_bands(["$G$", "$M$", "$K$"], num_pts=300, close=True)
-    Omega = np.linspace(0,12,200)
+    Omega = np.linspace(0,12,200,dtype=np.float32)
     SHG(hBN, Omega, 1, 1, 1)
     #hBN.SHG_ipa(Omega,[0,5])
     #print(hBN.hm(jnp.array((0.,0.)),()))

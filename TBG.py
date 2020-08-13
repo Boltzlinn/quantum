@@ -83,4 +83,13 @@ def TBG():
 
 
 if __name__ == "__main__":
+    t0 = time.perf_counter()
+    import cProfile, pstats
+    pr = cProfile.Profile()
+    pr.enable()
     TBG()
+    pr.disable()
+    pr.dump_stats("pipeline.prof")
+    
+    t1 = time.perf_counter()
+    print('total time is',t1-t0)
