@@ -5,7 +5,7 @@ import numpy as np
 def add_G(qs, G):
     S,T,A=qs.shape
     for s in prange(S):
-        for t in prange(T):
+        for t in range(T):
             for a in range(A):
                 qs[s, t, a] += G[a]
     
@@ -13,7 +13,7 @@ def add_G(qs, G):
 def W_update(W, overlape, fock, hartree):
     A, S, I, J, T, C, V = W.shape
     for s in prange(S):
-        for t in prange(T):
+        for t in range(T):
             for v in range(V): 
                 for c in range(C):
                     cv_conj = overlape[t, c + V, t, v].conjugate()

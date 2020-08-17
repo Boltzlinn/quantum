@@ -116,7 +116,7 @@ class Lattice(Quantum):
 
     #@partial(jit, static_argnums=(0,1,2,3))
     def mk_r_bare(self, nv, nf, nc):
-        vel_opt = jit(jacfwd(self.hm, argnums=(0)))
+        vel_opt = jit(jacfwd(self.hm, argnums=(0)), static_argnums=(1))
         vel_plane_wave = []
         for d_qtm in self.Basis:
             k, d_qtm_nk = self.separate(d_qtm, self.dim)

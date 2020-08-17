@@ -21,7 +21,7 @@ def TBG():
     dim = 2
     avec = np.array([[a * 1.5, a * 0.5 * sqrt_3], [a * 1.5, -a * 0.5 * sqrt_3]], np.float32)
     bvec = np.array([[(2.0 * Pi) / (3.0 * a), (2.0 * Pi) / (sqrt_3 * a)], [(2.0 * Pi) / (3.0 * a), -(2.0 * Pi) / (sqrt_3 * a)]], np.float32)
-    num_k1 = 40
+    num_k1 = 50
     hoppings = ((0, 0), (1, 0), (-1, 0), (0, -1), (0, 1))
     special_pts = {"$G$": (0., 0.), "$M_1$": (0.5, 0.), "$M_2$": (0., 0.5), "$M_3$": (0.5, 0.5), "$K_1$": (1./3., 2./3.), "$K_2$": (2./3., 1./3.)}
     tbg = Lattice(dim, avec, bvec, real_shape=num_k1, kstart=0.5 / num_k1, bz_shape=5, special_pts=special_pts, hoppings=hoppings, num_sub=4, name='tbg')
@@ -72,7 +72,7 @@ def TBG():
         return res/num_k1**2
     tbg.set_interaction(interaction)
     Omega = np.linspace(0,0.2,200)
-    SHG(tbg ,Omega, 2, 50, 2, eta=0.005)
+    SHG(tbg ,Omega, 2, 50, 2, eta=0.003)
 
     # tbg.mk_hamiltonian()
     # tbg.print_hamiltonian()
