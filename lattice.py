@@ -129,13 +129,17 @@ class Lattice(Quantum):
         energies_grad=np.einsum('asii->asi', vel)
         epsilon_gd=energies_grad[:,:,:, None] - energies_grad[:,:, None,:]  #asij
         r_bare_gd=(commutator(r_bare[:, None], vel) - epsilon_gd[:, None] * r_bare) * epsilon_inv
-        r_bare=np.transpose(r_bare[:,:, nf - nv:nf + nc, nf - nv:nf + nc], axes=(1, 2, 3, 0))
-        r_bare_cv=np.asarray(r_bare[:, nv:nv + nc, 0:nv].reshape((-1, self.dim)), order='C')
-        self.r_bare=np.asarray(np.transpose(r_bare, axes=(3, 0, 1, 2)),order='F')
+        r_bare = np.transpose(r_bare[:,:, nf - nv:nf + nc, nf - nv:nf + nc], axes=(1, 2, 3, 0))
+        r_bare_cv = np.asarray(r_bare[:, nv:nv + nc, 0:nv].reshape((-1, self.dim)), order='C')
+        vel_bare = np.transpose(vel[:,:, nf - nv:nf + nc, nf - nv:nf + nc], axes=(1, 2, 3, 0))
+        vel_bare_cv = np.asarray(vel_bare[:, nv:nv + nc, 0:nv].reshape((-1, self.dim)), order='C')
+        self.r_bare = np.asarray(np.transpose(r_bare, axes=(3, 0, 1, 2)), order='F')
+        self.vel_bare = np.asarray(np.transpose(vel_bare, axes=(3, 0, 1, 2)), order='F')
         self.r_bare_gd=np.asarray(r_bare_gd[:,:,:, nf - nv:nf + nc, nf - nv:nf + nc],order='F')
         self.epsilon=np.asarray(epsilon[:, nf - nv:nf + nc, nf - nv:nf + nc],order='F')
         self.epsilon_gd=np.asarray(epsilon_gd[:,:, nf - nv:nf + nc, nf - nv:nf + nc],order='F')
-        self.r_bare_cv=r_bare_cv
+        self.r_bare_cv = r_bare_cv
+        self.vel_bare_cv = vel_bare_cv
         print("r_bare solved")
 
     #@partial(jit, static_argnums=(0))
@@ -156,7 +160,7 @@ class Lattice(Quantum):
             return [idx1, idx2]
         self.overlape_idx = np.array([task(G) for G in self.G_list])
 
-    def plot_bands(self, pts_list, num_pts=200, d_qtm_nk=None, close=True):
+    def plot_bands(self, pts_list, num_pts=200, d_qtm_nk=None, close=True, energy_lim = None):
         if len(pts_list) == 0:
             print("No points to plot")
             pass
@@ -226,8 +230,9 @@ class Lattice(Quantum):
          for i in range(1, num_nodes-1)]
         ax.set_xticks(node_list)
         ax.set_xticklabels(label_list, minor=False)
-        plt.savefig("temp_band.pdf")
-        plt.show()
+        if energy_lim is not None: ax.set_ylim(energy_lim)
+        plt.savefig(self.name+"_band.pdf")
+        #plt.show()
 
 
 def test_Lattice():

@@ -7,7 +7,7 @@ from functools import partial
 import time
 from response import SHG
 
-def TBG():
+def TBG(Kappa):
     Pi = np.pi
     a0 = 2.46
     theta_angle = 1.05*Pi/180.0
@@ -21,7 +21,7 @@ def TBG():
     dim = 2
     avec = np.array([[a * 1.5, a * 0.5 * sqrt_3], [a * 1.5, -a * 0.5 * sqrt_3]], np.float32)
     bvec = np.array([[(2.0 * Pi) / (3.0 * a), (2.0 * Pi) / (sqrt_3 * a)], [(2.0 * Pi) / (3.0 * a), -(2.0 * Pi) / (sqrt_3 * a)]], np.float32)
-    num_k1 = 50
+    num_k1 = 32
     hoppings = ((0, 0), (1, 0), (-1, 0), (0, -1), (0, 1))
     special_pts = {"$G$": (0., 0.), "$M_1$": (0.5, 0.), "$M_2$": (0., 0.5), "$M_3$": (0.5, 0.5), "$K_1$": (1./3., 2./3.), "$K_2$": (2./3., 1./3.)}
     tbg = Lattice(dim, avec, bvec, real_shape=num_k1, kstart=0.5 / num_k1, bz_shape=5, special_pts=special_pts, hoppings=hoppings, num_sub=4, name='tbg')
@@ -59,8 +59,8 @@ def TBG():
     tbg.set_ext_potential(ext_potential)
     tbg.mk_V()
 
-    epsilon = 2
-    Kappa = 0.005
+    epsilon = 1
+    #Kappa = 0.005
     Uvalue = 0.1071/epsilon  ## Uvalue=e^2/(4*pi*epsilon0*Ls) 
     Jvalue = 0.0017/epsilon ## Jvalue = Uvalue*(qM/|K-K'|)
     qM = 4*Pi/(np.sqrt(3.0)*Ls)
@@ -71,15 +71,15 @@ def TBG():
         res = jnp.where(q_norm == 0., 0., jnp.where(flag, Uvalue * qM / jnp.sqrt(q_norm ** 2 + Kappa ** 2), Jvalue))
         return res/num_k1**2
     tbg.set_interaction(interaction)
-    Omega = np.linspace(0,0.2,200)
-    SHG(tbg ,Omega, 2, 50, 2, eta=0.003)
+    Omega = np.linspace(0.00001,0.2,200)
+    SHG(tbg ,Omega, 3, 50, 3, eta=0.005, gauge='l', scheme='iea')
 
     # tbg.mk_hamiltonian()
     # tbg.print_hamiltonian()
     # tbg.solve()
     # tbg.print_eigen_energies()
 
-    #tbg.plot_bands(["$G$", "$M_3$", "$K_1$", "$G$", "$K_2$","$M_3$"], num_pts=300, close=False)
+    #tbg.plot_bands(["$G$", "$M_3$", "$K_1$", "$G$", "$K_2$","$M_3$"], num_pts=300, close=False, energy_lim=(-0.1,0.1))
 
 
 if __name__ == "__main__":
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     import cProfile, pstats
     pr = cProfile.Profile()
     pr.enable()
-    TBG()
+    TBG(0.)
     pr.disable()
     pr.dump_stats("pipeline.prof")
     

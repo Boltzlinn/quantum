@@ -59,7 +59,7 @@ def bse_solve(lat, W, couple=False, op_cv=None):
         shape = W.shape
         W_exc = (W.reshape(-1, Dim) @ psi[0:Dim]).reshape(shape[0:-1] + (-1,)) #bsij(tcv),(tcv)n->bsijn
     else:
-        eigs, psi = linalg.eigh(H_eh, overwrite_a=True, driver='evr')
+        eigs, psi = linalg.eigh(H_eh, overwrite_a=True)
         shape = W.shape
         W_exc = (W.reshape(-1, Dim) @ psi).reshape(shape[0:-1] + (-1,))  #(bsij)(tcv),(tcv)n->(bsij)n->bsijn
     if op_cv is None:
@@ -67,6 +67,7 @@ def bse_solve(lat, W, couple=False, op_cv=None):
     else:
         op_exc = to_exciton_config(op_cv, psi, couple)
         return eigs, W_exc, op_exc
+    print('bse solved')
 
 def to_exciton_config(op_cv, psi, couple):
     if couple:
